@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "puan-lite"
+version = "0.1.0"
+description = ""
+authors = ["Rikard Olsson <rikard@ourstudio.se>"]
+readme = "README.md"
+packages = [{include = "puan_lite"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
