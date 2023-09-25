@@ -1,6 +1,10 @@
+import numpy as np
+
 from dataclasses import dataclass
 from typing import List, Union
 from itertools import chain
+from puan import variable
+from puan.ndarray import ge_polyhedron
 
 @dataclass
 class ValuedVariable:
@@ -51,6 +55,33 @@ class Or:
         ]
 
 @dataclass
+class Xor:
+
+    variables: List[str]
+
+    def constraints(self) -> List[GeLineq]:
+        return [
+            GeLineq(
+                valued_variables=list(
+                    map(
+                        lambda v: ValuedVariable(id=v, value=1),
+                        self.variables
+                    )
+                ),
+                bias=-1,
+            ),
+            GeLineq(
+                valued_variables=list(
+                    map(
+                        lambda v: ValuedVariable(id=v, value=-1),
+                        self.variables
+                    )
+                ),
+                bias=1,
+            )
+        ]
+
+@dataclass
 class Nand:
 
     variables: List[str]
@@ -91,6 +122,17 @@ class Impl:
 
     condition: Union[And, Or, Nand, Nor]
     consequence: Union[And, Or, Nand, Nor]
+
+    @property
+    def variables(self) -> List[str]:
+        return list(
+            set(
+                chain(
+                    self.condition.variables,
+                    self.consequence.variables,
+                )
+            )
+        )
 
     def constraints(self) -> List[GeLineq]:
 
@@ -479,3 +521,68 @@ class Empt:
                 bias=0,
             )
         ]
+
+@dataclass
+class Conjunction:
+
+    propositions: List[
+        Union[
+            And,
+            Or,
+            Nand,
+            Nor,
+            Impl,
+            Empt,
+        ]
+    ]
+
+    def variables(self) -> List[str]:
+        return list(
+            set(
+                chain(
+                    *map(
+                        lambda p: p.variables,
+                        self.propositions
+                    )
+                )
+            )
+        )
+
+    def constraints(self) -> List[GeLineq]:
+        return list(
+            chain(
+                *map(
+                    lambda p: p.constraints(),
+                    self.propositions
+                )
+            )
+        )
+
+    def to_ge_polyhedron(self) -> ge_polyhedron:
+        variables = list(
+            chain(
+                ["#b"],
+                sorted(self.variables())
+            )
+        )
+        constraints = self.constraints()
+        matrix = np.zeros((len(constraints), len(variables)))
+        matrix[:, 0] = list(
+            map(
+                lambda c: c.bias,
+                constraints,
+            )
+        )
+        for i, constraint in enumerate(constraints):
+            for valued_variable in constraint.valued_variables:
+                matrix[i, variables.index(valued_variable.id)] = valued_variable.value
+
+        return ge_polyhedron(
+            matrix,
+            variables=list(
+                map(
+                    lambda v: variable(id=v),
+                    variables
+                )
+            ),
+        )

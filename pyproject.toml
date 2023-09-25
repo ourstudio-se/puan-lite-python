@@ -8,6 +8,8 @@ packages = [{include = "puan_lite"}]
 
 [tool.poetry.dependencies]
 python = "^3.9"
+puan = "^0.5.0"
+npycvx = "^0.0.2"
 
 
 [build-system]
