@@ -1,7 +1,9 @@
 import numpy as np
+import npycvx
+import functools
 
 from dataclasses import dataclass
-from typing import List, Union
+from typing import List, Union, Iterator
 from itertools import chain, starmap, repeat
 from puan import variable
 from puan.ndarray import ge_polyhedron
@@ -305,14 +307,14 @@ class Impl:
                             map(
                                 lambda v: ValuedVariable(
                                     id=v, 
-                                    value=1,
+                                    value=-len(self.consequence.variables),
                                 ),
                                 self.condition.variables
                             ),
                             map(
                                 lambda v: ValuedVariable(
                                     id=v, 
-                                    value=1,
+                                    value=-1,
                                 ),
                                 self.consequence.variables
                             )
@@ -777,4 +779,50 @@ class Conjunction:
                     variables
                 )
             ),
+        )
+
+    def solve(self, objectives: List[dict], minimize: bool = False) -> Iterator[dict]:
+
+        # Convert system to a polyhedron
+        polyhedron = self.to_ge_polyhedron()
+
+        # Create partial function to solve the polyhedron
+        # with multiple objectives
+        solve_part_fn = functools.partial(
+            npycvx.solve_lp, 
+            *npycvx.convert_numpy(
+                polyhedron.A,
+                polyhedron.b,
+            ), 
+            minimize,
+        )
+
+        # Solve problems and return solutions as
+        # dictionaries of variable IDs and values
+        return starmap(
+            lambda x,y: dict(
+                zip(
+                    x,
+                    y,
+                )
+            ),
+            zip(
+                repeat(
+                    map(
+                        lambda x: x.id,
+                        polyhedron.A.variables,
+                    ),
+                    len(objectives)
+                ),
+                map(
+                    lambda x: x[1],
+                    map(
+                        solve_part_fn, 
+                        map(
+                            polyhedron.A.construct,
+                            objectives
+                        )
+                    )
+                )
+            )
         )
