@@ -2,7 +2,7 @@ import numpy as np
 
 from dataclasses import dataclass
 from typing import List, Union
-from itertools import chain
+from itertools import chain, starmap, repeat
 from puan import variable
 from puan.ndarray import ge_polyhedron
 
@@ -18,10 +18,48 @@ class GeLineq:
     valued_variables: List[ValuedVariable]
     bias: int
 
+    def __hash__(self) -> int:
+        return hash(
+            tuple(
+                sorted(
+                    map(
+                        lambda vv: (vv.id, vv.value),
+                        self.valued_variables
+                    )
+                ) + [self.bias]
+            )
+        )
+
 @dataclass
-class And:
+class Proposition:
 
     variables: List[str]
+
+    def __hash__(self) -> int:
+        return hash(
+            tuple(
+                sorted(self.variables) + [type(self)]
+            )
+        )
+
+@dataclass
+class AtMostOne(Proposition):
+
+    def constraints(self) -> List[GeLineq]:
+        return [
+            GeLineq(
+                valued_variables=list(
+                    map(
+                        lambda v: ValuedVariable(id=v, value=-1),
+                        self.variables
+                    )
+                ),
+                bias=1,
+            )
+        ]
+
+@dataclass
+class And(Proposition):
 
     def constraints(self) -> List[GeLineq]:
         return [
@@ -37,9 +75,7 @@ class And:
         ]
 
 @dataclass
-class Or:
-
-    variables: List[str]
+class Or(Proposition):
 
     def constraints(self) -> List[GeLineq]:
         return [
@@ -55,9 +91,7 @@ class Or:
         ]
 
 @dataclass
-class Xor:
-
-    variables: List[str]
+class Xor(Proposition):
 
     def constraints(self) -> List[GeLineq]:
         return [
@@ -82,9 +116,37 @@ class Xor:
         ]
 
 @dataclass
-class Nand:
+class XNor(Proposition):
 
-    variables: List[str]
+    def constraints(self) -> List[GeLineq]:
+        return list(
+            map(
+                lambda vo: GeLineq(
+                    valued_variables=list(
+                        chain(
+                            [
+                                ValuedVariable(
+                                    id=vo,
+                                    value=len(self.variables)-1,
+                                )
+                            ],
+                            map(
+                                lambda vi: ValuedVariable(
+                                    id=vi,
+                                    value=-1,
+                                ),
+                                set(self.variables) - set([vo]),
+                            ),
+                        )
+                    ),
+                    bias=0,
+                ),
+                self.variables,
+            )
+        )
+
+@dataclass
+class Nand(Proposition):
 
     def constraints(self) -> List[GeLineq]:
         return [
@@ -100,9 +162,7 @@ class Nand:
         ]
 
 @dataclass
-class Nor:
-
-    variables: List[str]
+class Nor(Proposition):
 
     def constraints(self) -> List[GeLineq]:
         return [
@@ -120,8 +180,13 @@ class Nor:
 @dataclass
 class Impl:
 
-    condition: Union[And, Or, Nand, Nor]
-    consequence: Union[And, Or, Nand, Nor]
+    condition: Union[And, Or, Nand, Nor, Xor]
+    consequence: Union[And, Or, Nand, Nor, Xor]
+
+    def __hash__(self) -> int:
+        return hash(
+            self.condition.__hash__() + self.consequence.__hash__()
+        )
 
     @property
     def variables(self) -> List[str]:
@@ -157,7 +222,7 @@ class Impl:
                             )
                         )
                     ),
-                    bias=(len(self.condition.variables)-1) * len(self.consequence.variables) * -1,
+                    bias=(len(self.condition.variables)-1) * len(self.consequence.variables),
                 )
             ]
         elif type(self.condition) == And and type(self.consequence) == Or:
@@ -181,7 +246,7 @@ class Impl:
                             )
                         )
                     ),
-                    bias=-1*(len(self.condition.variables)*len(self.consequence.variables)-1),
+                    bias=len(self.condition.variables)*len(self.consequence.variables)-1,
                 )
             ]
         elif type(self.condition) == And and type(self.consequence) == Nand:
@@ -205,7 +270,7 @@ class Impl:
                             )
                         )
                     ),
-                    bias=-1*(len(self.consequence.variables)*len(self.condition.variables)+len(self.consequence.variables)-1),
+                    bias=(len(self.consequence.variables)*len(self.condition.variables)+len(self.consequence.variables)-1),
                 )
             ]
         elif type(self.condition) == And and type(self.consequence) == Nor:
@@ -229,7 +294,31 @@ class Impl:
                             )
                         )
                     ),
-                    bias=-1*len(self.consequence.variables)*len(self.condition.variables),
+                    bias=len(self.consequence.variables)*len(self.condition.variables),
+                )
+            ]
+        elif type(self.condition) == And and type(self.consequence) == AtMostOne:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        chain(
+                            map(
+                                lambda v: ValuedVariable(
+                                    id=v, 
+                                    value=1,
+                                ),
+                                self.condition.variables
+                            ),
+                            map(
+                                lambda v: ValuedVariable(
+                                    id=v, 
+                                    value=1,
+                                ),
+                                self.consequence.variables
+                            )
+                        ),
+                    ),
+                    bias=len(self.condition.variables)*len(self.consequence.variables)+1,
                 )
             ]
         elif type(self.condition) == Or and type(self.consequence) == And:
@@ -249,11 +338,13 @@ class Impl:
                                         id=vi,
                                         value=1,
                                     ),
+                                    self.consequence.variables
                                 )
                             )
                         ),
                         bias=0,
-                    )
+                    ),
+                    self.condition.variables,
                 )
             )
         elif type(self.condition) == Or and type(self.consequence) == Or:
@@ -297,10 +388,11 @@ class Impl:
                                         id=vi,
                                         value=-1,
                                     ),
+                                    self.consequence.variables,
                                 )
                             )
                         ),
-                        bias=-1*(len(self.consequence.variables) + len(self.condition.variables) - 1),
+                        bias=len(self.consequence.variables) + len(self.condition.variables) - 1,
                     ),
                     self.condition.variables,
                 )
@@ -322,10 +414,37 @@ class Impl:
                                         id=vi,
                                         value=-1,
                                     ),
+                                    self.consequence.variables
                                 )
                             )
                         ),
-                        bias=-1*len(self.consequence.variables),
+                        bias=len(self.consequence.variables),
+                    ),
+                    self.condition.variables,
+                )
+            )
+        elif type(self.condition) == Or and type(self.consequence) == AtMostOne:
+            return list(
+                map(
+                    lambda vo: GeLineq(
+                        valued_variables=list(
+                            chain(
+                                [
+                                    ValuedVariable(
+                                        id=vo,
+                                        value=-len(self.consequence.variables),
+                                    )
+                                ],
+                                map(
+                                    lambda vi: ValuedVariable(
+                                        id=vi,
+                                        value=-1,
+                                    ),
+                                    self.consequence.variables
+                                )
+                            )
+                        ),
+                        bias=len(self.consequence.variables) + 1,
                     ),
                     self.condition.variables,
                 )
@@ -347,10 +466,11 @@ class Impl:
                                         id=vi,
                                         value=1,
                                     ),
+                                    self.consequence.variables,
                                 )
                             )
                         ),
-                        bias=len(self.consequence.variables),
+                        bias=-len(self.consequence.variables),
                     ),
                     self.condition.variables,
                 )
@@ -372,10 +492,11 @@ class Impl:
                                         id=vi,
                                         value=-1,
                                     ),
+                                    self.consequence.variables,
                                 )
                             )
                         ),
-                        bias=-(len(self.consequence.variables)+1),
+                        bias=len(self.consequence.variables)-1,
                     ),
                     self.condition.variables,
                 )
@@ -397,6 +518,7 @@ class Impl:
                                         id=vi,
                                         value=-1,
                                     ),
+                                    self.consequence.variables,
                                 )
                             )
                         ),
@@ -426,7 +548,7 @@ class Impl:
                             )
                         )
                     ),
-                    bias=len(self.consequence.variables),
+                    bias=-len(self.consequence.variables),
                 )
             ]
         elif type(self.condition) == Nor and type(self.consequence) == Or:
@@ -450,7 +572,7 @@ class Impl:
                             )
                         )
                     ),
-                    bias=1,
+                    bias=-1,
                 )
             ]
         elif type(self.condition) == Nor and type(self.consequence) == Nand:
@@ -474,7 +596,7 @@ class Impl:
                             )
                         )
                     ),
-                    bias=-(len(self.consequence.variables)-1),
+                    bias=len(self.consequence.variables)-1,
                 )
             ]
         elif type(self.condition) == Nor and type(self.consequence) == Nor:
@@ -501,8 +623,40 @@ class Impl:
                     bias=0,
                 )
             ]
+        elif type(self.condition) == And and type(self.consequence) == Xor:
+            return list(
+                set(
+                    chain(
+                        Impl(
+                            And(self.condition.variables),
+                            Or(self.consequence.variables),
+                        ).constraints(),
+                        Impl(
+                            And(self.condition.variables),
+                            AtMostOne(self.consequence.variables),
+                        ).constraints(),
+                    )
+                )
+            )
+        elif type(self.condition) == Or and type(self.consequence) == Xor:
+            return list(
+                set(
+                    chain(
+                        Impl(
+                            Or(self.condition.variables),
+                            Or(self.consequence.variables),
+                        ).constraints(),
+                        Impl(
+                            Or(self.condition.variables),
+                            AtMostOne(self.consequence.variables),
+                        ).constraints(),
+                    )
+                )
+            )
         else:
-            raise Exception("Invalid combination of condition and consequence.")
+            raise Exception(
+                f"Combination of {type(self.condition)} as condition and {type(self.consequence)} as consequence is not yet implemented."
+            )
 
 @dataclass
 class Empt:
@@ -533,6 +687,7 @@ class Conjunction:
             Nor,
             Impl,
             Empt,
+            Xor,
         ]
     ]
 
@@ -565,17 +720,54 @@ class Conjunction:
                 sorted(self.variables())
             )
         )
+        # Generate all constraints from each proposition
         constraints = self.constraints()
+        
+        # Initialize the matrix with zeros
         matrix = np.zeros((len(constraints), len(variables)))
-        matrix[:, 0] = list(
-            map(
-                lambda c: c.bias,
-                constraints,
+
+        # Set the bias values in the first column
+        matrix[:, 0] = -1 * np.array([c.bias for c in constraints])
+
+        # Create a dictionary to map variable IDs to column indices for faster indexing
+        variable_indices = dict(starmap(lambda i,v: (v,i), enumerate(variables)))
+
+        # Create an array of corresponding values
+        valued_variable_values = list(
+            chain(
+                *map(
+                    lambda cn: map(
+                        lambda vv: vv.value,
+                        cn.valued_variables
+                    ),
+                    constraints,
+                )
             )
         )
-        for i, constraint in enumerate(constraints):
-            for valued_variable in constraint.valued_variables:
-                matrix[i, variables.index(valued_variable.id)] = valued_variable.value
+
+        # Use np.where to find the row and column indices where values should be assigned
+        row_indices = list(
+            chain(
+                *starmap(
+                    lambda i,cn: repeat(i, len(cn.valued_variables)),
+                    enumerate(constraints),
+                )
+            )
+        )
+        column_indices = list(
+            chain(
+                *map(
+                    lambda cn: map(
+                        lambda vv: variable_indices[vv.id],
+                        cn.valued_variables
+                    ),
+                    constraints,
+                )
+            )
+        )
+
+        # Use advanced indexing to assign values to the matrix
+        matrix[row_indices, column_indices] = valued_variable_values
 
         return ge_polyhedron(
             matrix,
