@@ -477,6 +477,30 @@ class Impl:
                     self.condition.variables,
                 )
             )
+        elif type(self.condition) == Nand and type(self.consequence) == Or:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        chain(
+                            map(
+                                lambda v: ValuedVariable(
+                                    id=v,
+                                    value=1,
+                                ),
+                                self.condition.variables,
+                            ),
+                            map(
+                                lambda v: ValuedVariable(
+                                    id=v,
+                                    value=len(self.condition.variables),
+                                ),
+                                self.consequence.variables,
+                            )
+                        )
+                    ),
+                    bias=-len(self.condition.variables),
+                ),
+            ]
         elif type(self.condition) == Nand and type(self.consequence) == Nand:
             return list(
                 map(
