@@ -152,12 +152,12 @@ def test_impl_with_same_var_on_both_sides():
     ]
 
     for prop1, prop2 in prop_combs:
-        model = Conjunction([
+        model = And(
             Impl(
-                prop1(cdvars),
-                prop2(csvars),
+                prop1(*cdvars),
+                prop2(*csvars),
             )
-        ])
+        )
         polyhedron = model.to_ge_polyhedron()
         for inter in product([True, False], repeat=len(set(cdvars+csvars))):
             assert (polyhedron.A.dot(inter) >= polyhedron.b).all() == (not prop_code[prop1](inter[:2]) or prop_code[prop2](inter[1:]))

@@ -25,7 +25,7 @@ def generate_random_model(n: int, m: int):
             Nor,
             Xor,
         ])(
-            random.choices(variables, k=random.randint(2, 5))
+            random.choices(variables, k=random.randint(5, 10))
         ) for _ in range(n)
     ])
 
@@ -49,7 +49,7 @@ for i in tqdm.tqdm(
     # Some dummy data...
     A = ph.A
     b = ph.b
-    objectives = np.random.uniform(size=(1, A.shape[1]))
+    objectives = np.random.uniform(size=(100, A.shape[1]))
 
     # Load solve-function with the now converted numpy
     # matrices/vectors into cvxopt data type...
@@ -68,12 +68,13 @@ for i in tqdm.tqdm(
         )
     )
     e2 = time.time() - s2
-    collect.append({"size": ph.size, "time": e1+e2})
+    collect.append({"size": ph.size, "complex": (ph != 0).sum(), "time": e1, "id": "build"})
+    collect.append({"size": ph.size, "complex": (ph != 0).sum(), "time": e2, "id": "solve"})
 
 import seaborn as sns
 import pandas as pd
 
 df = pd.DataFrame(collect)
-plot = sns.lineplot(data=df, x="size", y="time")
+plot = sns.lineplot(data=df, x="size", y="time", hue="id")
 fig = plot.get_figure()
 fig.savefig("out.png") 
