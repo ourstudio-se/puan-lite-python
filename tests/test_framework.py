@@ -77,7 +77,7 @@ def test_impl_proposition():
         Or: lambda inter: any(inter),
         Nand: lambda inter: not all(inter),
         Nor: lambda inter: not any(inter),
-        Xor: lambda inter: sum(inter) % 2 == 1,
+        Xor: lambda inter: sum(inter) == 1,
         AtMostOne: lambda inter: sum(inter) <= 1,
     }
 
@@ -104,13 +104,60 @@ def test_impl_proposition():
         (Nor,   Nor)
     ]
 
-    for inter in product([True, False], repeat=len(cdvars + csvars)):
-        for prop1, prop2, cond in prop_combs:
-            model = Conjunction([
-                Impl(
-                    prop1(cdvars),
-                    prop2(csvars),
-                )
-            ])
-            polyhedron = model.to_ge_polyhedron()
+    for prop1, prop2 in prop_combs:
+        model = Conjunction([
+            Impl(
+                prop1(cdvars),
+                prop2(csvars),
+            )
+        ])
+        polyhedron = model.to_ge_polyhedron()
+        for inter in product([True, False], repeat=len(cdvars + csvars)):
             assert (polyhedron.A.dot(inter) >= polyhedron.b).all() == (not prop_code[prop1](inter[:2]) or prop_code[prop2](inter[2:]))
+
+def test_impl_with_same_var_on_both_sides():
+
+    cdvars = ['a', 'b']
+    csvars = ['b', 'c']
+
+    prop_code = {
+        And: lambda inter: all(inter),
+        Or: lambda inter: any(inter),
+        Nand: lambda inter: not all(inter),
+        Nor: lambda inter: not any(inter),
+        Xor: lambda inter: sum(inter) == 1,
+        AtMostOne: lambda inter: sum(inter) <= 1,
+    }
+
+    prop_combs = [
+        (And,   And),
+        (And,   Or),
+        (And,   Nand),
+        (And,   Nor),
+        (And,   Xor),
+        (And,   AtMostOne),
+        (Or,    And),
+        (Or,    Or),
+        (Or,    Nand),
+        (Or,    Nor),
+        (Or,    Xor),
+        (Nand,  And),
+        (Nand,  Or),
+        (Nand,  Nand),
+        (Nand,  Nor),
+        (Nor,   And),
+        (Nor,   Or),
+        (Nor,   Nand),
+        (Nor,   Nor)
+    ]
+
+    for prop1, prop2 in prop_combs:
+        model = Conjunction([
+            Impl(
+                prop1(cdvars),
+                prop2(csvars),
+            )
+        ])
+        polyhedron = model.to_ge_polyhedron()
+        for inter in product([True, False], repeat=len(set(cdvars+csvars))):
+            assert (polyhedron.A.dot(inter) >= polyhedron.b).all() == (not prop_code[prop1](inter[:2]) or prop_code[prop2](inter[1:]))

@@ -10,6 +10,7 @@ packages = [{include = "puan_lite"}]
 python = "^3.9"
 puan = "^0.5.0"
 npycvx = "^0.0.2"
+sympy = "^1.12"
 
 
 [build-system]

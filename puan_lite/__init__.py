@@ -3,10 +3,61 @@ import npycvx
 import functools
 
 from dataclasses import dataclass
-from typing import List, Union, Iterator
+from typing import List, Union, Iterator, Optional
 from itertools import chain, starmap, repeat
 from puan import variable
 from puan.ndarray import ge_polyhedron
+
+from sympy.logic.boolalg import to_cnf
+from sympy.parsing.sympy_parser import parse_expr
+
+def impl_death_rows(impl_prop) -> list:
+
+    """
+        Converts an implication proposition into a list of constraints, naively.
+        NOTE: This leads into an exponential number of constraints in relation to the number of variables.
+    """
+    def string_to_constraint(string: str) -> Optional[GeLineq]:
+        if string[0] == "(" and string[-1] == ")":
+            return string_to_constraint(string[1:-1])
+
+        literals = set(string.split(" | "))
+        atoms = list(set(string.replace("~","").split(" | ")))
+        lit_join = "".join(literals)
+        if any(map(lambda a: lit_join.count(a) > 1, atoms)):
+            # If true here, expression is tautology
+            return None
+            
+        return GeLineq(
+            valued_variables=list(
+                map(
+                    lambda v: ValuedVariable(
+                        id=v[1:] if v[0] == "~" else v,
+                        value=-1 if v[0] == "~" else 1,
+                    ),
+                    literals,
+                ),
+            ),
+            bias=-1 + string.count("~"),
+        )
+
+    return list(
+        set(
+            filter(
+                lambda x: x is not None,
+                map(
+                    string_to_constraint,
+                    str(
+                        to_cnf(
+                            parse_expr(
+                                impl_prop.to_string(),
+                            )
+                        )
+                    ).split(" & ")
+                )
+            )
+        )
+    )
 
 @dataclass
 class ValuedVariable:
@@ -44,6 +95,10 @@ class Proposition:
             )
         )
 
+    def __post_init__(self):
+        # Make the list unique after initialization
+        self.variables = list(set(self.variables))
+
 @dataclass
 class AtMostOne(Proposition):
 
@@ -59,6 +114,9 @@ class AtMostOne(Proposition):
                 bias=1,
             )
         ]
+
+    def to_string(self) -> str:
+        return f"({' + '.join(self.variables)}) <= 1"
 
 @dataclass
 class And(Proposition):
@@ -76,6 +134,9 @@ class And(Proposition):
             )
         ]
 
+    def to_string(self) -> str:
+        return ' & '.join(self.variables)
+
 @dataclass
 class Or(Proposition):
 
@@ -91,6 +152,9 @@ class Or(Proposition):
                 bias=-1,
             )
         ]
+
+    def to_string(self) -> str:
+        return ' | '.join(self.variables)
 
 @dataclass
 class Xor(Proposition):
@@ -116,6 +180,9 @@ class Xor(Proposition):
                 bias=1,
             )
         ]
+
+    def to_string(self) -> str:
+        return ' ^ '.join(self.variables)
 
 @dataclass
 class XNor(Proposition):
@@ -147,6 +214,9 @@ class XNor(Proposition):
             )
         )
 
+    def to_string(self) -> str:
+        return f"~({' ^ '.join(self.variables)})"
+
 @dataclass
 class Nand(Proposition):
 
@@ -163,6 +233,9 @@ class Nand(Proposition):
             )
         ]
 
+    def to_string(self) -> str:
+        return f"~({' & '.join(self.variables)})"
+
 @dataclass
 class Nor(Proposition):
 
@@ -178,6 +251,44 @@ class Nor(Proposition):
                 bias=0,
             )
         ]
+
+    def to_string(self) -> str:
+        return f"~({' | '.join(self.variables)})"
+
+@dataclass
+class AllOrNone(Proposition):
+
+    def constraints(self) -> List[GeLineq]:
+        return list(
+            map(
+                lambda vo: GeLineq(
+                    valued_variables=list(
+                        chain(
+                            [
+                                ValuedVariable(
+                                    id=vo,
+                                    value=-len(
+                                        set(self.variables) - set([vo]),
+                                    ),
+                                )
+                            ],
+                            map(
+                                lambda vi: ValuedVariable(
+                                    id=vi,
+                                    value=1,
+                                ),
+                                set(self.variables) - set([vo]),
+                            ),
+                        )
+                    ),
+                    bias=0,
+                ),
+                self.variables,
+            )
+        )
+
+    def to_string(self) -> str:
+        return f"({All(self.variables).to_string()}) | {Nor(self.variables).to_string()}"
 
 @dataclass
 class Impl:
@@ -201,9 +312,19 @@ class Impl:
             )
         )
 
+    def to_string(self) -> str:
+        return f"({self.condition.to_string()}) >> ({self.consequence.to_string()})"
+
     def constraints(self) -> List[GeLineq]:
 
         if type(self.condition) == And and type(self.consequence) == And:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                left_union = set(self.condition.variables).intersection(self.consequence.variables).union(self.condition.variables)
+                right_union = set(self.consequence.variables).difference(left_union)
+                return Impl(
+                    And(left_union),
+                    And(right_union),
+                ).constraints()
             return [
                 GeLineq(
                     valued_variables=list(
@@ -252,30 +373,15 @@ class Impl:
                 )
             ]
         elif type(self.condition) == And and type(self.consequence) == Nand:
-            return [
-                GeLineq(
-                    valued_variables=list(
-                        chain(
-                            map(
-                                lambda v: ValuedVariable(
-                                    id=v, 
-                                    value=-len(self.consequence.variables),
-                                ),
-                                self.condition.variables
-                            ),
-                            map(
-                                lambda v: ValuedVariable(
-                                    id=v, 
-                                    value=-1,
-                                ),
-                                self.consequence.variables
-                            )
-                        )
-                    ),
-                    bias=(len(self.consequence.variables)*len(self.condition.variables)+len(self.consequence.variables)-1),
+            return Nand(
+                list(
+                    set(self.condition.variables + self.consequence.variables)
                 )
-            ]
+            ).constraints()
         elif type(self.condition) == And and type(self.consequence) == Nor:
+            # If they share at least one variables, we can reduce directly to a Nand on condition side.
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return Nand(self.condition.variables).constraints()
             return [
                 GeLineq(
                     valued_variables=list(
@@ -300,6 +406,13 @@ class Impl:
                 )
             ]
         elif type(self.condition) == And and type(self.consequence) == AtMostOne:
+            # If they share at least one variables, we can reduce directly to a Nand proposition of the variable's union.
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return Nand(
+                    list(
+                        set(self.condition.variables).union(self.consequence.variables),
+                    )
+                ).constraints()
             return [
                 GeLineq(
                     valued_variables=list(
@@ -324,6 +437,8 @@ class Impl:
                 )
             ]
         elif type(self.condition) == Or and type(self.consequence) == And:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -374,6 +489,8 @@ class Impl:
                 )
             ]
         elif type(self.condition) == Or and type(self.consequence) == Nand:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -400,6 +517,8 @@ class Impl:
                 )
             )
         elif type(self.condition) == Or and type(self.consequence) == Nor:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -426,6 +545,8 @@ class Impl:
                 )
             )
         elif type(self.condition) == Or and type(self.consequence) == AtMostOne:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                raise Exception("Not implemented")
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -452,6 +573,8 @@ class Impl:
                 )
             )
         elif type(self.condition) == Nand and type(self.consequence) == And:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -502,6 +625,14 @@ class Impl:
                 ),
             ]
         elif type(self.condition) == Nand and type(self.consequence) == Nand:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                right_union = set(self.condition.variables).intersection(self.consequence.variables).union(self.consequence.variables)
+                left_union = set(self.condition.variables).difference(right_union)
+                return Impl(
+                    And(right_union),
+                    And(left_union),
+                ).constraints()
+
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -528,6 +659,8 @@ class Impl:
                 )
             )
         elif type(self.condition) == Nand and type(self.consequence) == Nor:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return list(
                 map(
                     lambda vo: GeLineq(
@@ -554,6 +687,8 @@ class Impl:
                 )
             )
         elif type(self.condition) == Nor and type(self.consequence) == And:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return [
                 GeLineq(
                     valued_variables=list(
@@ -578,6 +713,8 @@ class Impl:
                 )
             ]
         elif type(self.condition) == Nor and type(self.consequence) == Or:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return [
                 GeLineq(
                     valued_variables=list(
@@ -602,6 +739,8 @@ class Impl:
                 )
             ]
         elif type(self.condition) == Nor and type(self.consequence) == Nand:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return [
                 GeLineq(
                     valued_variables=list(
@@ -626,6 +765,8 @@ class Impl:
                 )
             ]
         elif type(self.condition) == Nor and type(self.consequence) == Nor:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return [
                 GeLineq(
                     valued_variables=list(
@@ -650,6 +791,13 @@ class Impl:
                 )
             ]
         elif type(self.condition) == And and type(self.consequence) == Xor:
+            # If they share at least one variables, we can reduce directly to a Nand proposition of the variable's union.
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return Nand(
+                    list(
+                        set(self.condition.variables).union(self.consequence.variables),
+                    )
+                ).constraints()
             return list(
                 set(
                     chain(
@@ -665,6 +813,8 @@ class Impl:
                 )
             )
         elif type(self.condition) == Or and type(self.consequence) == Xor:
+            if len(set(self.condition.variables).union(self.consequence.variables)) < len(self.condition.variables) + len(self.consequence.variables):
+                return impl_death_rows(self)
             return list(
                 set(
                     chain(
