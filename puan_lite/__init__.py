@@ -1,15 +1,59 @@
 import numpy as np
 import npycvx
 import functools
+import base64
+import hashlib
 
+from string import ascii_lowercase
 from dataclasses import dataclass
-from typing import List, Union, Iterator, Optional
-from itertools import chain, starmap, repeat
+from typing import List, Union, Iterator, Optional, Tuple, Dict
+from itertools import chain, starmap, repeat, permutations
 from puan import variable
 from puan.ndarray import ge_polyhedron
 
 from sympy.logic.boolalg import to_cnf
 from sympy.parsing.sympy_parser import parse_expr
+
+def rev_dict(d: dict) -> dict:
+    return dict(
+        zip(
+            d.values(),
+            d.keys(),
+        )
+    )
+
+def id_hash_string(id: str, prefix: str = "VAR") -> str:
+    return prefix+base64.b32encode(
+        hashlib.sha1(id.encode('utf-8')).digest(),
+    ).decode()[:-1]
+
+def shared_variable_strings_map(variables) -> Dict[str,str]:
+    _variables = sorted(
+        set(
+            chain(
+                *map(
+                    lambda x: x.variable_strings_map().keys(),
+                    filter(
+                        lambda x: type(x) != str,
+                        variables,
+                    )
+                ),
+                filter(
+                    lambda x: type(x) == str,
+                    variables,
+                )
+            )
+        )
+    )
+    return dict(
+        zip(
+            _variables,
+            map(
+                id_hash_string,
+                _variables,
+            ),
+        )
+    )
 
 def impl_death_rows(impl_prop) -> list:
 
@@ -17,14 +61,13 @@ def impl_death_rows(impl_prop) -> list:
         Converts an implication proposition into a list of constraints, naively.
         NOTE: This leads into an exponential number of constraints in relation to the number of variables.
     """
-    def string_to_constraint(string: str) -> Optional[GeLineq]:
+    def string_to_constraint(vm_map: dict, string: str) -> Optional[GeLineq]:
         if string[0] == "(" and string[-1] == ")":
-            return string_to_constraint(string[1:-1])
+            return string_to_constraint(vm_map, string[1:-1])
 
-        literals = set(string.split(" | "))
+        literals = list(set(string.split(" | ")))
         atoms = list(set(string.replace("~","").split(" | ")))
-        lit_join = "".join(literals)
-        if any(map(lambda a: lit_join.count(a) > 1, atoms)):
+        if any(map(lambda a: string.count(a) > 1, atoms)):
             # If true here, expression is tautology
             return None
             
@@ -32,7 +75,7 @@ def impl_death_rows(impl_prop) -> list:
             valued_variables=list(
                 map(
                     lambda v: ValuedVariable(
-                        id=v[1:] if v[0] == "~" else v,
+                        id=vm_map[v[1:] if v[0] == "~" else v],
                         value=-1 if v[0] == "~" else 1,
                     ),
                     literals,
@@ -46,7 +89,12 @@ def impl_death_rows(impl_prop) -> list:
             filter(
                 lambda x: x is not None,
                 map(
-                    string_to_constraint,
+                    functools.partial(
+                        string_to_constraint,
+                        rev_dict(
+                            impl_prop.variable_strings_map(),
+                        ),
+                    ),
                     str(
                         to_cnf(
                             parse_expr(
@@ -85,9 +133,10 @@ class GeLineq:
 
 class Proposition:
 
-    def __init__(self, *variables: List[Union["Proposition", str]]):
+    def __init__(self, *variables: List[Union["Proposition", str]], id: Optional[str] = None):
         # Make the list unique after initialization
         object.__setattr__(self, "variables", list(set(variables)))
+        object.__setattr__(self, "id", id)
 
     def __hash__(self) -> int:
         return hash(
@@ -110,7 +159,7 @@ class Proposition:
                 chain(
                     filter(
                         lambda x: type(x) == str,
-                        self.variables,
+                        self.variables + [self.id],
                     ),
                     *map(
                         lambda x: x.atoms(),
@@ -126,10 +175,34 @@ class Proposition:
     def is_complex(self) -> bool:
         return any(map(lambda x: type(x) != str, self.variables))
 
-    def variable_strings(self) -> List[str]:
+    def variable_strings_map(self) -> Dict[str,str]:
+        return shared_variable_strings_map(self.variables)
+
+    def id_proposition(self) -> "Proposition":
+        if self.id is None:
+            return self
+        else:
+            return Impl(
+                And(self.id),
+                self.__class__(
+                    *self.variables,
+                ),
+            )
+
+    @property
+    def composite_variables(self) -> list:
         return list(
-            map(
-                lambda x: x if type(x) == str else x.to_string(),
+            filter(
+                lambda x: type(x) != str,
+                self.variables,
+            )
+        )
+
+    @property
+    def non_composite_variables(self) -> list:
+        return list(
+            filter(
+                lambda x: type(x) == str,
                 self.variables,
             )
         )
@@ -137,48 +210,75 @@ class Proposition:
 class AtMostOne(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=-1),
-                        self.variables
-                    )
-                ),
-                bias=1,
-            )
-        ]
+        if self.id is None:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=-1),
+                            self.variables
+                        )
+                    ),
+                    bias=1,
+                )
+            ]
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return f"({' + '.join(self.variable_strings())}) <= 1"
+        if self.id is None:
+            return f"({' + '.join(self.variable_strings_map().keys())}) <= 1"
+        else:
+            return self.id_proposition().to_string()
 
 class And(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=1),
-                        self.variables
-                    )
-                ),
-                bias=len(self.variables) * -1,
-            )
-        ]
-
-    def to_string(self) -> str:
-        return ' & '.join(self.variable_strings())
-
-    def constraints(self) -> List[GeLineq]:
-        return list(
-            chain(
-                *map(
-                    lambda p: p.constraints(),
-                    self.variables,
+        if self.id is None:
+            return list(
+                chain(
+                    *map(
+                        lambda v: v.constraints(),
+                        filter(
+                            lambda p: type(p) != str,
+                            self.variables,
+                        )
+                    ),
+                    [
+                        GeLineq(
+                            valued_variables=list(
+                                map(
+                                    lambda v: ValuedVariable(id=v, value=1),
+                                    filter(
+                                        lambda v: type(v) == str,
+                                        self.variables
+                                    )
+                                )
+                            ),
+                            bias=len(list(filter(lambda v: type(v) == str, self.variables))) * -1,
+                        )
+                    ]
                 )
             )
-        )
+        else:
+            return self.id_proposition().constraints()
+
+    def to_string(self) -> str:
+        if self.id is None:
+            return ' & '.join(
+                chain(
+                    map(
+                        self.variable_strings_map().get,
+                        self.non_composite_variables,
+                    ),
+                    map(
+                        lambda x: x.to_string(),
+                        self.composite_variables,
+                    )
+                )
+            )
+        else:
+            return self.id_proposition().to_string()
 
     def to_ge_polyhedron(self) -> ge_polyhedron:
         variables = list(
@@ -246,7 +346,7 @@ class And(Proposition):
             ),
         )
 
-    def solve(self, objectives: List[dict], minimize: bool = False) -> Iterator[dict]:
+    def solve(self, *objectives: List[dict], minimize: bool = False) -> Iterator[dict]:
 
         # Convert system to a polyhedron
         polyhedron = self.to_ge_polyhedron()
@@ -295,155 +395,247 @@ class And(Proposition):
 class Or(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=1),
-                        self.variables
-                    )
-                ),
-                bias=-1,
-            )
-        ]
+        if self.id is None:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=1),
+                            self.variables
+                        )
+                    ),
+                    bias=-1,
+                )
+            ]
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return ' | '.join(self.variable_strings())
+        if self.id is None:
+            return ' | '.join(
+                chain(
+                    map(
+                        self.variable_strings_map().get,
+                        self.non_composite_variables,
+                    ),
+                    map(
+                        lambda x: x.to_string(),
+                        self.composite_variables,
+                    )
+                )
+            )
+        else:
+            return self.id_proposition().to_string()
 
 class Xor(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=1),
-                        self.variables
-                    )
+        if self.id is None:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=1),
+                            self.variables
+                        )
+                    ),
+                    bias=-1,
                 ),
-                bias=-1,
-            ),
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=-1),
-                        self.variables
-                    )
-                ),
-                bias=1,
-            )
-        ]
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=-1),
+                            self.variables
+                        )
+                    ),
+                    bias=1,
+                )
+            ]
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return ' ^ '.join(self.variable_strings())
+        if self.id is None:
+            return ' ^ '.join(
+                chain(
+                    map(
+                        self.variable_strings_map().get,
+                        self.non_composite_variables,
+                    ),
+                    map(
+                        lambda x: x.to_string(),
+                        self.composite_variables,
+                    )
+                )
+            )
+        else:
+            return self.id_proposition().to_string()
 
 class XNor(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return list(
-            map(
-                lambda vo: GeLineq(
-                    valued_variables=list(
-                        chain(
-                            [
-                                ValuedVariable(
-                                    id=vo,
-                                    value=len(self.variables)-1,
-                                )
-                            ],
-                            map(
-                                lambda vi: ValuedVariable(
-                                    id=vi,
-                                    value=-1,
+        if self.id is None:
+            return list(
+                map(
+                    lambda vo: GeLineq(
+                        valued_variables=list(
+                            chain(
+                                [
+                                    ValuedVariable(
+                                        id=vo,
+                                        value=len(self.variables)-1,
+                                    )
+                                ],
+                                map(
+                                    lambda vi: ValuedVariable(
+                                        id=vi,
+                                        value=-1,
+                                    ),
+                                    set(self.variables) - set([vo]),
                                 ),
-                                set(self.variables) - set([vo]),
-                            ),
-                        )
+                            )
+                        ),
+                        bias=0,
                     ),
-                    bias=0,
-                ),
-                self.variables,
+                    self.variables,
+                )
             )
-        )
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return f"~({' ^ '.join(self.variable_strings())})"
+        if self.id is None:
+            return f"""~({' ^ '.join(
+                chain(
+                    map(
+                        self.variable_strings_map().get,
+                        self.non_composite_variables,
+                    ),
+                    map(
+                        lambda x: x.to_string(),
+                        self.composite_variables,
+                    )
+                )
+            )})"""
+        else:
+            return self.id_proposition().to_string()
 
 class Nand(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=-1),
-                        self.variables
-                    )
-                ),
-                bias=len(self.variables)-1,
-            )
-        ]
+        if self.id is None:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=-1),
+                            self.variables
+                        )
+                    ),
+                    bias=len(self.variables)-1,
+                )
+            ]
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return f"~({' & '.join(self.variable_strings())})"
+        if self.id is None:
+            return f"""~({' & '.join(
+                chain(
+                    map(
+                        self.variable_strings_map().get,
+                        self.non_composite_variables,
+                    ),
+                    map(
+                        lambda x: x.to_string(),
+                        self.composite_variables,
+                    )
+                )
+            )})"""
+        else:
+            return self.id_proposition().to_string()
 
 class Nor(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=-1),
-                        self.variables
-                    )
-                ),
-                bias=0,
-            )
-        ]
+        if self.id is None:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=-1),
+                            self.variables
+                        )
+                    ),
+                    bias=0,
+                )
+            ]
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return f"~({' | '.join(self.variable_strings())})"
+        if self.id is None:
+            return f"""~({' | '.join(
+                chain(
+                    map(
+                        self.variable_strings_map().get,
+                        self.non_composite_variables,
+                    ),
+                    map(
+                        lambda x: x.to_string(),
+                        self.composite_variables,
+                    )
+                )
+            )})"""
+        else:
+            return self.id_proposition().to_string()
 
 class AllOrNone(Proposition):
 
     def constraints(self) -> List[GeLineq]:
-        return list(
-            map(
-                lambda vo: GeLineq(
-                    valued_variables=list(
-                        chain(
-                            [
-                                ValuedVariable(
-                                    id=vo,
-                                    value=-len(
-                                        set(self.variables) - set([vo]),
+        if self.id is None:
+            return list(
+                map(
+                    lambda vo: GeLineq(
+                        valued_variables=list(
+                            chain(
+                                [
+                                    ValuedVariable(
+                                        id=vo,
+                                        value=-len(
+                                            set(self.variables) - set([vo]),
+                                        ),
+                                    )
+                                ],
+                                map(
+                                    lambda vi: ValuedVariable(
+                                        id=vi,
+                                        value=1,
                                     ),
-                                )
-                            ],
-                            map(
-                                lambda vi: ValuedVariable(
-                                    id=vi,
-                                    value=1,
+                                    set(self.variables) - set([vo]),
                                 ),
-                                set(self.variables) - set([vo]),
-                            ),
-                        )
+                            )
+                        ),
+                        bias=0,
                     ),
-                    bias=0,
-                ),
-                self.variables,
+                    self.variables,
+                )
             )
-        )
+        else:
+            return self.id_proposition().constraints()
 
     def to_string(self) -> str:
-        return f"({All(self.variables).to_string()}) | {Nor(self.variables).to_string()}"
+        if self.id is None:
+            return f"({All(self.variables).to_string()}) | {Nor(self.variables).to_string()}"
+        else:
+            return self.id_proposition().to_string()
 
 @dataclass
 class Impl:
 
     condition: Union[And, Or, Nand, Nor, Xor]
     consequence: Union[And, Or, Nand, Nor, Xor]
+    id: Optional[str] = None
 
     def __hash__(self) -> int:
         return hash(
@@ -457,14 +649,24 @@ class Impl:
                 chain(
                     self.condition.variables,
                     self.consequence.variables,
+                    [self.id] if not self.id is None else [],
                 )
             )
         )
 
+    def variable_strings_map(self) -> Dict[str,str]:
+        return shared_variable_strings_map(self.variables)
+
     def to_string(self) -> str:
-        return f"({self.condition.to_string()}) >> ({self.consequence.to_string()})"
+        if self.id is None:
+            return f"({self.condition.to_string()}) >> ({self.consequence.to_string()})"
+        else:
+            return self.id_proposition().to_string()
 
     def constraints(self) -> List[GeLineq]:
+
+        if not self.id is None:
+            return self.id_proposition().constraints()
 
         if self.condition.is_complex() or self.consequence.is_complex():
             return impl_death_rows(self)
@@ -994,16 +1196,23 @@ class Impl:
 class Empt:
 
     variables: List[str]
+    id: Optional[str] = None
 
     def constraints(self) -> List[GeLineq]:
-        return [
-            GeLineq(
-                valued_variables=list(
-                    map(
-                        lambda v: ValuedVariable(id=v, value=0),
-                        self.variables
-                    )
-                ),
-                bias=0,
-            )
-        ]
+        if self.id is None:
+            return [
+                GeLineq(
+                    valued_variables=list(
+                        map(
+                            lambda v: ValuedVariable(id=v, value=0),
+                            self.variables
+                        )
+                    ),
+                    bias=0,
+                )
+            ]
+        else:
+            return Impl(
+                And(*self.variables),
+                And(self.id),
+            ).constraints()
