@@ -223,7 +223,7 @@ class AtMostOne(Proposition):
 
 
     def to_string(self) -> str:
-        return f"({' + '.join(self.variable_strings_map().keys())}) <= 1"
+        return f"(({' + '.join(self.variable_strings_map().keys())}) <= 1)"
         
 
 class And(Proposition):
@@ -256,7 +256,7 @@ class And(Proposition):
         )
 
     def to_string(self) -> str:
-        return ' & '.join(
+        return "(" + ' & '.join(
             chain(
                 map(
                     self.variable_strings_map().get,
@@ -267,7 +267,7 @@ class And(Proposition):
                     self.composite_variables,
                 )
             )
-        )
+        ) + ")"
         
 
     def to_ge_polyhedron(self) -> ge_polyhedron:
@@ -398,7 +398,7 @@ class Or(Proposition):
         ]
 
     def to_string(self) -> str:
-        return ' | '.join(
+        return "(" + ' | '.join(
             chain(
                 map(
                     self.variable_strings_map().get,
@@ -409,7 +409,7 @@ class Or(Proposition):
                     self.composite_variables,
                 )
             )
-        )
+        ) + ")"
         
 
 class Xor(Proposition):
@@ -438,7 +438,7 @@ class Xor(Proposition):
 
 
     def to_string(self) -> str:
-        return ' ^ '.join(
+        return "(" + ' ^ '.join(
             chain(
                 map(
                     self.variable_strings_map().get,
@@ -449,7 +449,7 @@ class Xor(Proposition):
                     self.composite_variables,
                 )
             )
-        )
+        ) + ")"
     
 
 class XNor(Proposition):
@@ -591,7 +591,7 @@ class AllOrNone(Proposition):
 
 
     def to_string(self) -> str:
-        return f"({All(self.variables).to_string()}) | {Nor(self.variables).to_string()}"
+        return f"(({All(self.variables).to_string()}) | {Nor(self.variables).to_string()})"
         
 
 @dataclass
@@ -625,7 +625,7 @@ class Impl:
         return shared_variable_strings_map(self.variables)
 
     def to_string(self) -> str:
-        return f"({self.condition.to_string()}) >> ({self.consequence.to_string()})"
+        return f"(({self.condition.to_string()}) >> ({self.consequence.to_string()}))"
         
 
     def constraints(self) -> List[GeLineq]:

@@ -213,3 +213,20 @@ def test_special_char_variables():
     )
     assert model.to_ge_polyhedron().shape[1] == len(random_special_char_variables)+1
     assert next(model.solve({random_special_char_variables[0]: 1})).get(random_special_char_variables[0]) == 1
+
+def test_special_cases():
+
+    model = And(
+        Impl(
+            Or(
+                And("A","B"),
+                And("C","D"),
+            ),
+            And(
+                Xor(*"abc"),
+                Xor(*"xyz")
+            )
+        )
+    )
+
+    assert next(model.solve({"A": 1, "B": 1})) == {"A": 1, "B": 1, "C": 0, "D": 0, "a": 1, "b": 0, "c": 0, "x": 1, "y": 0, "z": 0}
