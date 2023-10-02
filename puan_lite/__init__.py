@@ -1154,10 +1154,7 @@ class Impl:
             )
         )
 
-@dataclass
-class Empt:
-
-    variables: List[str]
+class Empt(Proposition):
 
     def constraints(self) -> List[GeLineq]:
         return [

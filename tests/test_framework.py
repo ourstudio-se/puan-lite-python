@@ -75,6 +75,15 @@ def test_atmostone_proposition():
     for interpretation in product([True, False], repeat=len(variables)):
         assert (polyhedron.A.dot(interpretation) >= polyhedron.b).all() == (sum(interpretation) <= 1)
 
+def test_empt_proposition():
+    variables = ['a', 'b']
+    model = And(
+        Empt(*variables),
+    )
+    polyhedron = model.to_ge_polyhedron()
+    for interpretation in product([True, False], repeat=len(variables)):
+        assert (polyhedron.A.dot(interpretation) >= polyhedron.b).all() == True
+
 def test_impl_proposition():
     cdvars = ['a', 'b']
     csvars = ['c', 'd']
