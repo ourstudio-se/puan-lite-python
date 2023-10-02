@@ -169,24 +169,6 @@ def test_impl_with_same_var_on_both_sides():
         for inter in product([True, False], repeat=len(set(cdvars+csvars))):
             assert (polyhedron.A.dot(inter) >= polyhedron.b).all() == (not prop_code[prop1](inter[:2]) or prop_code[prop2](inter[1:]))
 
-def test_composite_variables():
-
-    model = And(
-        Or(
-            And('a', 'b'),
-            And('c', 'd'),
-            id="first"
-        ),
-        Or(
-            And('e', 'f'),
-            And('g', 'h'),
-            id="second"
-        ),
-    )
-
-    assert next(model.solve({"first": 1})) == {"a": 1, "b": 1, "c": 0, "d": 0, "e": 0, "f": 0, "first": 1, "g": 0, "h": 0, "second": 0}
-    assert next(model.solve({"second": 1})) == {"a": 0, "b": 0, "c": 0, "d": 0, "e": 1, "f": 1, "first": 0, "g": 0, "h": 0, "second": 1}
-
 def test_special_char_variables():
 
     allowed_special_chars = ["!", "@", "#", "$", "%", "&", "*", "(", ")", "-", "+", "=", "[", "]", "{", "}", "|", ":", "'", "\"", ",", "<", ".", ">", "/", "?", "`", "~", "_"]
